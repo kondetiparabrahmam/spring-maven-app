@@ -22,38 +22,34 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Setup Java 17
+    - name: Setup Java
       uses: actions/setup-java@v4
       with:
         distribution: temurin
         java-version: "17"
 
-    - name: Build Maven Project
+    - name: Build Jar
       run: mvn clean package -DskipTests
 
-    # 🔐 OIDC AUTH (THIS IS CRITICAL)
-    - name: Configure AWS Credentials
+    - name: Configure AWS Credentials (OIDC)
       uses: aws-actions/configure-aws-credentials@v4
       with:
         role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
         aws-region: ${{ env.AWS_REGION }}
 
-    - name: Encode JAR
-      run: |
-        JAR_FILE=$(ls target/*.jar | head -n 1)
-        base64 "$JAR_FILE" | tr -d '\n' > app.jar.b64
+    - name: Upload JAR to GitHub artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: app
+        path: target/*.jar
 
-    - name: Deploy to EC2 using SSM
+    - name: Deploy via SSM (download inside EC2)
       run: |
-        JAR_CONTENT=$(cat app.jar.b64)
-
         aws ssm send-command \
           --instance-ids "${{ env.INSTANCE_ID }}" \
           --document-name "AWS-RunShellScript" \
-          --comment "Deploy Spring Boot App" \
-          --parameters "commands=[
-            \"echo '$JAR_CONTENT' | base64 -d > /home/ec2-user/app/app.jar\",
-            \"sudo systemctl restart spring-app\",
-            \"sudo systemctl status spring-app\"
-          ]" \
+          --parameters 'commands=[
+            "curl -L -o /home/ec2-user/app/app.jar https://github.com/kondetiparabrahmam/spring-maven-app/releases/latest/download/app.jar",
+            "sudo systemctl restart spring-app"
+          ]' \
           --region $AWS_REGION
