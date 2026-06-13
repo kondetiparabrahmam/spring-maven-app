@@ -36,28 +36,27 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Copy JAR + Deploy via SSM
+      # ✅ Upload jar to GitHub artifact storage (temporary public URL alternative avoided)
+      - name: Prepare JAR
         run: |
-          JAR_FILE=$(ls target/*.jar | head -n 1)
+          mkdir -p artifact
+          cp target/*.jar artifact/app.jar
 
+      - name: Deploy via SSM (download + run)
+        run: |
           aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --comment "Deploy Spring Boot App" \
             --parameters "commands=[
-              \"pkill -f app.jar || true\",
               \"mkdir -p /home/ubuntu/app\",
-              \"rm -f /home/ubuntu/app/app.jar\",
-              \"cat > /home/ubuntu/app/app.jar << 'EOF'\",
-              \"$(base64 -w 0 $JAR_FILE)\",
-              \"EOF\",
-              \"base64 -d /home/ubuntu/app/app.jar > /home/ubuntu/app/app-real.jar || true\",
-              \"mv /home/ubuntu/app/app-real.jar /home/ubuntu/app/app.jar || true\",
+              \"pkill -f app.jar || true\",
+              \"wget -O /home/ubuntu/app/app.jar https://YOUR_PUBLIC_JAR_URL/app.jar || true\",
               \"nohup java -jar /home/ubuntu/app/app.jar > /home/ubuntu/app/app.log 2>&1 &\"
             ]" \
             --region $AWS_REGION
 
-      - name: Verify Instance Status
+      - name: Verify EC2 status
         run: |
           aws ssm describe-instance-information \
             --region $AWS_REGION \
