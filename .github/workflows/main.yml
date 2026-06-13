@@ -1,74 +1,72 @@
-name: Create EC2 + Deploy Spring Boot (OIDC + SSM)
+name: Deploy Spring Boot to EC2 via OIDC + SSM
 
 on:
-  push:
-    branches:
-      - main
+push:
+branches:
+- main
 
 permissions:
-  id-token: write
-  contents: read
+id-token: write
+contents: read
 
 env:
-  AWS_REGION: ap-south-1
-  INSTANCE_TYPE: t2.micro
-  KEY_NAME: my-key
-  SECURITY_GROUP_ID: sg-xxxxxxxx
-  SUBNET_ID: subnet-xxxxxxxx
-  INSTANCE_PROFILE: githubactions
+AWS_REGION: ap-south-1
+INSTANCE_ID: i-079e247ee04788721
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
+deploy:
+runs-on: ubuntu-latest
 
-    steps:
+```
+steps:
+  - name: Checkout Code
+    uses: actions/checkout@v4
 
-    - name: Checkout Code
-      uses: actions/checkout@v4
+  - name: Setup Java
+    uses: actions/setup-java@v4
+    with:
+      distribution: temurin
+      java-version: "17"
 
-    - name: Setup Java
-      uses: actions/setup-java@v4
-      with:
-        distribution: temurin
-        java-version: "17"
+  - name: Build Application
+    run: mvn clean package -DskipTests
 
-    - name: Build Jar
-      run: mvn clean package -DskipTests
+  - name: Configure AWS Credentials (OIDC)
+    uses: aws-actions/configure-aws-credentials@v4
+    with:
+      role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+      aws-region: ${{ env.AWS_REGION }}
 
-    - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-        aws-region: ${{ env.AWS_REGION }}
+  - name: Verify AWS Identity
+    run: aws sts get-caller-identity
 
-    - name: Create EC2 Instance
-      run: |
-        INSTANCE_ID=$(aws ec2 run-instances \
-          --image-id ami-0f5ee92e2d63afc18 \
-          --instance-type $INSTANCE_TYPE \
-          --iam-instance-profile Name=$INSTANCE_PROFILE \
-          --key-name $KEY_NAME \
-          --security-group-ids $SECURITY_GROUP_ID \
-          --subnet-id $SUBNET_ID \
-          --query 'Instances[0].InstanceId' \
-          --output text)
+  - name: Check SSM Connectivity
+    run: |
+      aws ssm describe-instance-information \
+        --region $AWS_REGION
 
-        echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+  - name: Deploy Application
+    run: |
+      COMMAND_ID=$(aws ssm send-command \
+        --instance-ids "$INSTANCE_ID" \
+        --document-name "AWS-RunShellScript" \
+        --parameters '{
+          "commands":[
+            "sudo mkdir -p /home/ubuntu/app",
+            "sudo pkill -f app.jar || true",
+            "echo Deployment Started"
+          ]
+        }' \
+        --query "Command.CommandId" \
+        --output text \
+        --region $AWS_REGION)
 
-    - name: Wait for EC2
-      run: aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+      echo "Command ID: $COMMAND_ID"
 
-    - name: Wait for SSM
-      run: sleep 60
-
-    - name: Deploy via SSM
-      run: |
-        aws ssm send-command \
-          --instance-ids "$INSTANCE_ID" \
-          --document-name "AWS-RunShellScript" \
-          --parameters 'commands=[
-            "mkdir -p /home/ec2-user/app",
-            "curl -L -o /home/ec2-user/app/app.jar https://github.com/kondetiparabrahmam/spring-maven-app/releases/latest/download/app.jar",
-            "sudo systemctl restart spring-app"
-          ]' \
-          --region $AWS_REGION
+  - name: Verify Instance Status
+    run: |
+      aws ssm describe-instance-information \
+        --region $AWS_REGION \
+        --query "InstanceInformationList[*].[InstanceId,PingStatus]" \
+        --output table
+```
